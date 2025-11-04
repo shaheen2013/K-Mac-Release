@@ -115,7 +115,7 @@ jobs:
           fi
           
           echo "📦 Found app at: $APP_PATH"
-          node scripts/notarize.js "$APP_PATH"
+          node ./scripts/notarize.js "$APP_PATH"
           echo "✅ Notarization step completed."
       
       # Create GitHub Release
