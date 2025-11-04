@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
 
@@ -408,6 +409,15 @@ async function startMacOSAudioCapture(geminiSessionRef) {
     }
 
     console.log('SystemAudioDump path:', systemAudioPath);
+
+    // Ensure the binary has execute permissions (required on macOS)
+    try {
+        fs.chmodSync(systemAudioPath, 0o755);
+        console.log('Set execute permissions on SystemAudioDump');
+    } catch (chmodError) {
+        console.warn('Failed to set execute permissions on SystemAudioDump:', chmodError.message);
+        // Continue anyway - might already have permissions
+    }
 
     // Spawn SystemAudioDump with stealth options
     const spawnOptions = {
