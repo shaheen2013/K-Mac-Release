@@ -1,6 +1,8 @@
 name: Release macOS App
 on:
   push:
+    branches:
+      - dev
     tags:
       - "v*"
 permissions:
