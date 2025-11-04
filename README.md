@@ -1,1 +1,6 @@
-# K-Mac-Release
+# Klevere (Desktop)
+
+#### Protocol
+```
+klevere://
+```

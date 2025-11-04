@@ -1,0 +1,129 @@
+name: Release macOS App
+on:
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: write
+  
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    environment: prod
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      
+      - name: Install Dependencies
+        run: npm install
+      
+      # Decode and prepare the certificate file
+      - name: Decode Certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+        run: |
+          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          echo "✅ Certificate file written:"
+          ls -lh certificate.p12
+      
+      # Create keychain and import certificate
+      - name: Import Certificate into Keychain
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          # Create a new keychain
+          security create-keychain -p temp-pass build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p temp-pass build.keychain
+          
+          # Import the certificate
+          security import certificate.p12 \
+            -k ~/Library/Keychains/build.keychain-db \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productsign
+          
+          # Allow codesign to access the keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k temp-pass build.keychain
+          
+          # Verify certificate is imported
+          echo "✅ Certificates in keychain:"
+          security find-identity -v -p codesigning
+      
+      # Get the signing identity name
+      - name: Get Signing Identity
+        id: signing
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | grep -o '".*"' | sed 's/"//g')
+          if [ -z "$IDENTITY" ]; then
+            echo "❌ No Developer ID Application certificate found"
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+          echo "✅ Found signing identity: $IDENTITY"
+          echo "identity=$IDENTITY" >> $GITHUB_OUTPUT
+      
+      # Build macOS app with proper signing
+      - name: Build macOS app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CERTIFICATE_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
+        run: |
+          echo "🔨 Building with signing identity: ${{ steps.signing.outputs.identity }}"
+          npm run make
+      
+      # Verify the app is properly signed before notarization
+      - name: Verify Code Signature
+        run: |
+          APP_PATH=$(find out -name "*.app" | head -1)
+          echo "🔍 Verifying signature for: $APP_PATH"
+          codesign -vvv --deep --strict "$APP_PATH" || {
+            echo "❌ Code signature verification failed"
+            exit 1
+          }
+          echo "✅ App is properly signed"
+          
+          # Check if Info.plist is bound
+          codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep "Info.plist"
+      
+      # Notarize app
+      - name: Notarize App
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          echo "🚀 Starting notarization..."
+          
+          APP_PATH=$(find out -name "*.app" | head -1)
+          
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ No .app file found in out/ directory"
+            ls -R out || echo "out folder missing"
+            exit 1
+          fi
+          
+          echo "📦 Found app at: $APP_PATH"
+          node scripts/notarize.js "$APP_PATH"
+          echo "✅ Notarization step completed."
+      
+      # Create GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            out/make/**/*.dmg
+            out/make/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
